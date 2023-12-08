@@ -1,0 +1,570 @@
+---
+title: "Duckeed 2019"
+author: "Antonino Malacrinò"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+code_download: yes
+---
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library("phyloseq")
+library("ggplot2")
+library("scales")
+library("grid")
+library("DESeq2")
+library("vegan")
+library("ape")
+library("plyr") 
+#library("ggpmisc")
+library("dplyr")
+library("broom")
+library("picante")
+library("Rmisc")
+library("emmeans")
+library("car")
+library("lme4")
+library("tibble")
+library("data.table")
+library("limma")
+library("microbiome")
+library("ggvenn")
+library("patchwork")
+library("RColorBrewer")
+library("RVAideMemoire")
+library("data.table")
+library("decontam")
+library("ggrepel")
+
+NTHREADS = 8
+
+create_dt <- function(x){
+  DT::datatable(x,
+                extensions = 'Buttons',
+                options = list(dom = 'Blfrtip',
+                               buttons = c('copy', 'csv', 'excel'),
+                               lengthMenu = list(c(10,25,50,-1),
+                                                 c(10,25,50,"All"))))
+}
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+load(file = 'data/ASV_table.rds')
+load(file = 'data/ASV_table_18s.rds')
+#metadata <- read.table("data/metadata_its.txt", sep = "\t", header = T, row.names = 1)
+#sample_data(ps.its) <- metadata
+
+remove.cont <- function(GM){
+  sample_data(GM)$is.neg <- sample_data(GM)$treatment == "negative_ctr"
+  contamdf.prev <- isContaminant(GM, method="prevalence", neg="is.neg", threshold = 0.05)
+  cont.remove <- subset(contamdf.prev, contaminant == "TRUE")
+  cont.remove <- row.names(cont.remove)
+  allTaxa = taxa_names(GM)
+  allTaxa <- allTaxa[!(allTaxa %in% cont.remove)]
+  GM <-  prune_taxa(allTaxa, GM)
+  GM <- subset_samples(GM, treatment != "negative_ctr")
+  return(GM)
+}
+
+ps.16s <- remove.cont(ps.16s)
+ps.16s <- subset_taxa(ps.16s, Order !="Chloroplast")
+ps.16s <- subset_taxa(ps.16s, Family !="Mitochondria")
+ps.16s <- filter_taxa(ps.16s, function (x) {sum(x > 0) > 1}, prune=TRUE)
+
+ps.18s <- remove.cont(ps.18s)
+ps.18s <- subset_taxa(ps.18s, Class !="Streptophyta")
+ps.18s <- subset_taxa(ps.18s, Phylum !="Opisthokonta")
+ps.18s <- subset_taxa(ps.18s, Phylum =="Archaeplastida")
+ps.18s <- filter_taxa(ps.18s, function (x) {sum(x > 0) > 1}, prune=TRUE)
+x <- as.data.frame(tax_table(ps.18s))
+```
+
+# General stats - 16S {.tabset}
+## General
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+ps.16s
+```
+
+## Seq depth
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+sdt = data.table(as(sample_data(ps.16s), "data.frame"),
+                 TotalReads = sample_sums(ps.16s), keep.rownames = TRUE)
+setnames(sdt, "rn", "SampleID")
+sdt
+```
+
+## Rarefaction curves
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+#rarecurve((otu_table(ps.16s)), step=500, cex=0.5)
+```
+
+
+# General stats - 18S {.tabset}
+## General
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+ps.18s
+```
+
+## Seq depth
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+sdt = data.table(as(sample_data(ps.18s), "data.frame"),
+                 TotalReads = sample_sums(ps.18s), keep.rownames = TRUE)
+setnames(sdt, "rn", "SampleID")
+sdt
+```
+
+## Rarefaction curves
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+#rarecurve((otu_table(ps.18s)), step=500, cex=0.5)
+```
+
+# Multivariate 16S {.tabset}
+## PERMANOVA
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+sampledf <- data.frame(sample_data(ps.16s))
+dist.mat <- phyloseq::distance(ps.16s, method = "unifrac")
+perm <- how(nperm = 999)
+setBlocks(perm) <- with(sampledf, pond)
+set.seed(100)
+pmv <- adonis2(dist.mat ~ week * treatment, data = sampledf, permutations = perm)
+pmv
+```
+
+## PERMANOVA posthoc
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+pairwise.perm.manova(dist.mat, paste0(sampledf$week), nperm = 999, progress = TRUE, p.method = "fdr", F = T, R2 = T)
+```
+
+## NMDS
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+cap_ord <- ordinate(physeq = ps.16s, method = "NMDS", distance = dist.mat, formula = ~ 1)
+cap_plot <- plot_ordination(physeq = ps.16s, ordination = cap_ord, axes = c(1,2)) +
+  theme_bw(base_size = 20) +
+  stat_ellipse(mapping = aes(color = treatment),
+               alpha = 0.4,
+               type = "norm",
+               show.legend=F) +
+  geom_point(mapping = aes(color = treatment, shape = week), size = 5) +
+  theme(legend.title= element_blank(), 
+        legend.background = element_rect(color = NA),
+        legend.text = element_text(size = 12),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        panel.grid = element_blank()) +
+  scale_color_manual(name = "Legend", values=c("#1b9e77", "#d95f02"), labels = c("Control", "Herbivory"), breaks = c("ctr", "herb"))
+ggsave(cap_plot, filename = "figures/nmds_16s.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+cap_plot
+```
+
+# Multivariate 18S {.tabset}
+## PERMANOVA
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+sampledf <- data.frame(sample_data(ps.18s))
+dist.mat <- phyloseq::distance(ps.18s, method = "unifrac")
+perm <- how(nperm = 999)
+setBlocks(perm) <- with(sampledf, pond)
+set.seed(100)
+pmv <- adonis2(dist.mat ~ week * treatment, data = sampledf, permutations = perm)
+pmv
+```
+
+## PERMANOVA posthoc
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+pairwise.perm.manova(dist.mat, paste0(sampledf$week), nperm = 999, progress = TRUE, p.method = "fdr", F = T, R2 = T)
+```
+
+## NMDS
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+cap_ord <- ordinate(physeq = ps.18s, method = "NMDS", distance = dist.mat, formula = ~ 1)
+cap_plot <- plot_ordination(physeq = ps.18s, ordination = cap_ord, axes = c(1,2)) +
+  theme_bw(base_size = 20) +
+  stat_ellipse(mapping = aes(color = treatment),
+               alpha = 0.4,
+               type = "norm",
+               show.legend=F) +
+  geom_point(mapping = aes(color = treatment, shape = week), size = 5) +
+  theme(legend.title= element_blank(), 
+        legend.background = element_rect(color = NA),
+        legend.text = element_text(size = 12),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        panel.grid = element_blank())+
+  scale_color_manual(name = "Legend", values=c("#1b9e77", "#d95f02"), labels = c("Control", "Herbivory"), breaks = c("ctr", "herb"))
+ggsave(cap_plot, filename = "figures/nmds_18s.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+cap_plot
+```
+
+# Diversity 16S {.tabset}
+## model Shannon
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+div <- microbiome::alpha(ps.16s, index = "all")
+otus <- as.data.frame((otu_table(ps.16s)))
+tree <- phy_tree(ps.16s)
+div.pd <- pd(otus, tree, include.root = FALSE)
+div <- cbind(sample_data(ps.16s), div)
+div <- cbind(div, div.pd)
+
+model <- lmer(diversity_shannon ~ treatment * week * (1|pond), data = div)
+Anova(model)
+m1 <- emmeans(model, "week")
+pairs(m1)
+```
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+div_plot <- ggplot(div, aes(x = treatment, y = diversity_shannon, fill = treatment)) +
+  facet_wrap(~week) +
+  theme_bw(base_size = 14) +
+  geom_boxplot(outlier.colour="black", notch=F, outlier.shape=NA) +
+  labs(y = "Shannon diversity") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.title.y = element_text(color="black"),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank()) +
+    theme(legend.title=element_blank(),
+        legend.background = element_rect(fill="transparent"),
+        legend.key = element_rect(fill="transparent"),
+        legend.text = element_text(size = 10),
+        legend.position = "none") +
+  scale_fill_manual(name = "Legend", values=c("#1b9e77", "#d95f02"), labels = c("Control", "Herbivory"), breaks = c("ctr", "herb"))
+ggsave(div_plot, filename = "figures/div_16s_shannon.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+div_plot
+```
+
+## model Phylogenetic diversity
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+div <- microbiome::alpha(ps.16s, index = "all")
+otus <- as.data.frame((otu_table(ps.16s)))
+tree <- phy_tree(ps.16s)
+div.pd <- pd(otus, tree, include.root = FALSE)
+div <- cbind(sample_data(ps.16s), div)
+div <- cbind(div, div.pd)
+
+model <- lmer(PD ~ treatment * week * (1|pond), data = div)
+Anova(model)
+```
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+div_plot <- ggplot(div, aes(x = treatment, y = PD, fill = treatment)) +
+  facet_wrap(~week) +
+  theme_bw(base_size = 14) +
+  geom_boxplot(outlier.colour="black", notch=F, outlier.shape=NA) +
+  labs(y = "Phylogenetic diversity") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.title.y = element_text(color="black"),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank()) +
+    theme(legend.title=element_blank(),
+        legend.background = element_rect(fill="transparent"),
+        legend.key = element_rect(fill="transparent"),
+        legend.text = element_text(size = 10),
+        legend.position = "none")+
+  scale_fill_manual(name = "Legend", values=c("#1b9e77", "#d95f02"), labels = c("Control", "Herbivory"), breaks = c("ctr", "herb"))
+ggsave(div_plot, filename = "figures/div_16s_pd.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+div_plot
+```
+
+# Diversity 18S {.tabset}
+## model Shannon
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+div <- microbiome::alpha(ps.18s, index = "all")
+otus <- as.data.frame((otu_table(ps.18s)))
+tree <- phy_tree(ps.18s)
+div.pd <- pd(otus, tree, include.root = FALSE)
+div <- cbind(sample_data(ps.18s), div)
+div <- cbind(div, div.pd)
+
+model <- lmer(diversity_shannon ~ treatment * week * (1|pond), data = div)
+Anova(model)
+```
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+div_plot <- ggplot(div, aes(x = treatment, y = diversity_shannon, fill = treatment)) +
+  facet_wrap(~week) +
+  theme_bw(base_size = 14) +
+  geom_boxplot(outlier.colour="black", notch=F, outlier.shape=NA) +
+  labs(y = "Shannon diversity") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.title.y = element_text(color="black"),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank()) +
+    theme(legend.title=element_blank(),
+        legend.background = element_rect(fill="transparent"),
+        legend.key = element_rect(fill="transparent"),
+        legend.text = element_text(size = 10),
+        legend.position = "none")+
+  scale_fill_manual(name = "Legend", values=c("#1b9e77", "#d95f02"), labels = c("Control", "Herbivory"), breaks = c("ctr", "herb"))
+ggsave(div_plot, filename = "figures/div_18s_shannon.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+div_plot
+```
+
+## model Phylogenetic diversity
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+div <- microbiome::alpha(ps.18s, index = "all")
+otus <- as.data.frame((otu_table(ps.18s)))
+tree <- phy_tree(ps.18s)
+div.pd <- pd(otus, tree, include.root = FALSE)
+div <- cbind(sample_data(ps.18s), div)
+div <- cbind(div, div.pd)
+
+model <- lmer(PD ~ treatment * week * (1|pond), data = div)
+Anova(model)
+```
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+div_plot <- ggplot(div, aes(x = treatment, y = PD, fill = treatment)) +
+  facet_wrap(~week) +
+  theme_bw(base_size = 14) +
+  geom_boxplot(outlier.colour="black", notch=F, outlier.shape=NA) +
+  labs(y = "Phylogenetic diversity") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.title.y = element_text(color="black"),
+        panel.grid = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank()) +
+    theme(legend.title=element_blank(),
+        legend.background = element_rect(fill="transparent"),
+        legend.key = element_rect(fill="transparent"),
+        legend.text = element_text(size = 10),
+        legend.position = "none")+
+  scale_fill_manual(name = "Legend", values=c("#1b9e77", "#d95f02"), labels = c("Control", "Herbivory"), breaks = c("ctr", "herb"))
+ggsave(div_plot, filename = "figures/div_18s_pd.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+div_plot
+```
+
+# Taxonomical composition {.tabset}
+## 16S
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+diagdds = phyloseq_to_deseq2(ps.16s, ~ 1)
+ts = counts(diagdds)
+geoMeans = apply(ts, 1, function(row) if (all(row == 0)) 0 else exp(mean(log(row[row != 0]))))
+diagdds = estimateSizeFactors(diagdds, geoMeans=geoMeans)
+diagdds = estimateDispersions(diagdds)
+diagvst = getVarianceStabilizedData(diagdds)
+diagdds.c <- removeBatchEffect(diagvst)
+diagdds.c[diagdds.c<0] <- 0
+ps.16sn <- ps.16s
+otu_table(ps.16sn) <- otu_table(diagdds.c, taxa_are_rows = TRUE)
+
+glom <- microbiome::aggregate_taxa(ps.16sn, "Genus")
+glom <- microbiome::transform(glom, "compositional")
+dat <- psmelt(glom)
+filt.gen <- dat %>% group_by(Genus) %>% summarize(mean = mean(Abundance)) %>% filter(mean <= 0.01)
+dat <- subset(dat, !(OTU %in% filt.gen$Genus))
+dat <- dat %>% group_by(Genus) %>% summarize(cs = mean(Abundance)) %>% mutate(cs = cs/sum(cs)) 
+dat <- psmelt(glom)
+filt.gen <- dat %>% group_by(Genus) %>% summarize(mean = mean(Abundance)) %>% filter(mean <= 0.01)
+dat <- subset(dat, !(OTU %in% filt.gen$Genus))
+dat <- dat %>% group_by(treatment, Genus) %>% summarize(cs = mean(Abundance)) %>% mutate(cs = cs/sum(cs)) 
+
+library("RColorBrewer")
+nb.cols <- length(unique(dat$Genus))
+mycolors <- colorRampPalette(brewer.pal(8, "Set3"))(nb.cols)
+
+taxa_plot <- ggplot(dat, aes(x = as.factor(treatment), y = cs, fill = Genus)) +
+                        #facet_grid(Site ~ Year) +
+                        theme_bw(base_size = 14) +
+                        geom_bar(stat="identity") +
+                        labs(y = "Relative proportion") +
+                        theme(legend.background = element_rect(fill="white"),
+                              legend.key = element_rect(fill="transparent"),
+                              legend.text = element_text(size = 12),
+                              axis.text.x = element_text(color="black"),
+                              axis.text.y = element_text(color="black"),
+                              panel.grid = element_blank()) +
+                        scale_y_continuous(labels = scales::percent) +
+                        scale_fill_manual(values = mycolors) +
+                        labs(y = "Relative abundance", x="") 
+ggsave(taxa_plot, filename = "figures/taxa_16s.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+taxa_plot
+```
+
+## 18S
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+diagdds = phyloseq_to_deseq2(ps.18s, ~ 1)
+ts = counts(diagdds)
+geoMeans = apply(ts, 1, function(row) if (all(row == 0)) 0 else exp(mean(log(row[row != 0]))))
+diagdds = estimateSizeFactors(diagdds, geoMeans=geoMeans)
+diagdds = estimateDispersions(diagdds)
+diagvst = getVarianceStabilizedData(diagdds)
+diagdds.c <- removeBatchEffect(diagvst)
+diagdds.c[diagdds.c<0] <- 0
+ps.18sn <- ps.18s
+otu_table(ps.18sn) <- otu_table(diagdds.c, taxa_are_rows = TRUE)
+
+glom <- microbiome::aggregate_taxa(ps.18sn, "Genus")
+glom <- microbiome::transform(glom, "compositional")
+dat <- psmelt(glom)
+filt.gen <- dat %>% group_by(Genus) %>% summarize(mean = mean(Abundance)) %>% filter(mean <= 0.01)
+dat <- subset(dat, !(OTU %in% filt.gen$Genus))
+dat <- dat %>% group_by(Genus) %>% summarize(cs = mean(Abundance)) %>% mutate(cs = cs/sum(cs)) 
+dat <- psmelt(glom)
+filt.gen <- dat %>% group_by(Genus) %>% summarize(mean = mean(Abundance)) %>% filter(mean <= 0.01)
+dat <- subset(dat, !(OTU %in% filt.gen$Genus))
+dat <- dat %>% group_by(treatment, Genus) %>% summarize(cs = mean(Abundance)) %>% mutate(cs = cs/sum(cs)) 
+
+library("RColorBrewer")
+nb.cols <- length(unique(dat$Genus))
+mycolors <- colorRampPalette(brewer.pal(8, "Set3"))(nb.cols)
+
+taxa_plot <- ggplot(dat, aes(x = as.factor(treatment), y = cs, fill = Genus)) +
+                        #facet_grid(Site ~ Year) +
+                        theme_bw(base_size = 14) +
+                        geom_bar(stat="identity") +
+                        labs(y = "Relative proportion") +
+                        theme(legend.background = element_rect(fill="white"),
+                              legend.key = element_rect(fill="transparent"),
+                              legend.text = element_text(size = 12),
+                              axis.text.x = element_text(color="black"),
+                              axis.text.y = element_text(color="black"),
+                              panel.grid = element_blank()) +
+                        scale_y_continuous(labels = scales::percent) +
+                        scale_fill_manual(values = mycolors) +
+                        labs(y = "Relative abundance", x="") 
+ggsave(taxa_plot, filename = "figures/taxa_18s.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+taxa_plot
+```
+
+# Differential taxa {.tabset}
+## 16S - herbivory
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+cal.diff.taxa <- function(object, direction){
+  diagdds <- phyloseq_to_deseq2(object, ~ 1)
+  ts <- counts(diagdds)
+  geoMeans = apply(ts, 1, function(row) if (all(row == 0)) 0 else exp(mean(log(row[row != 0]))))
+  diagdds = estimateSizeFactors(diagdds, geoMeans=geoMeans)
+  diagdds = estimateDispersions(diagdds)
+  diagdds$group <- factor(paste0(diagdds$treatment))
+  design(diagdds) <- ~ group
+  dds <-DESeq(diagdds, betaPrior=FALSE, parallel = T)
+  c1 <- results(dds, contrast=c("group", "herb", "ctr"), parallel = T)
+  c1 <- as.data.frame(c1)
+  c1 <- setDT(c1, keep.rownames = TRUE)[]
+  c1 <- c1[,c("rn", "log2FoldChange", "padj")]
+  x <- if(direction == "up"){c1 %>% dplyr::filter(log2FoldChange > 0 & padj < 0.05)} else if(direction == "down"){c1 %>% dplyr::filter(log2FoldChange < 0 & padj < 0.05)}
+  return(x)
+}
+
+cal.diff.taxa(ps.16s, "up") %>% create_dt
+```
+
+## 16S - control
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+cal.diff.taxa(ps.16s, "down") %>% create_dt
+```
+
+
+## 18S - herbivory
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+cal.diff.taxa(ps.18s, "up") %>% create_dt
+```
+
+
+## 18S - control
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+cal.diff.taxa(ps.18s, "down") %>% create_dt
+```
+
+
+# Volcano plot {.tabset}
+## 18S
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+cal.diff.taxa2 <- function(object){
+  diagdds <- phyloseq_to_deseq2(object, ~ 1)
+  ts <- counts(diagdds)
+  geoMeans = apply(ts, 1, function(row) if (all(row == 0)) 0 else exp(mean(log(row[row != 0]))))
+  diagdds = estimateSizeFactors(diagdds, geoMeans=geoMeans)
+  diagdds = estimateDispersions(diagdds)
+  diagdds$group <- factor(paste0(diagdds$treatment))
+  design(diagdds) <- ~ group
+  dds <-DESeq(diagdds, betaPrior=FALSE, parallel = T)
+  c1 <- results(dds, contrast=c("group", "herb", "ctr"), parallel = T)
+  c1 <- as.data.frame(c1)
+  c1 <- setDT(c1, keep.rownames = TRUE)[]
+  c1 <- c1[,c("rn", "log2FoldChange", "padj")]
+  # x <- if(direction == "up"){c1 %>% dplyr::filter(log2FoldChange > 0 & padj < 0.05)} else if(direction == "down"){c1 %>% dplyr::filter(log2FoldChange < 0 & padj < 0.05)}
+  tax.table <- as.data.frame(tax_table(object))
+  tax.table <- setDT(tax.table, keep.rownames = TRUE)[]
+  tx <- merge(c1, tax.table, by = "rn")
+  return(tx)
+}
+
+df.diff <- cal.diff.taxa2(ps.18s)
+
+df.diff$diffexpressed <- "no changes"
+df.diff$diffexpressed[df.diff$log2FoldChange > 0.1 & df.diff$padj < 0.05] <- "herbivory"
+df.diff$diffexpressed[df.diff$log2FoldChange < -0.1 & df.diff$padj < 0.05] <- "control"
+
+plot <- ggplot(data=df.diff) +
+        theme_bw(base_size = 12) +
+        geom_point(aes(x = log2FoldChange, y = -log10(padj), colour = diffexpressed), size=2) +
+        geom_text_repel(aes(x = log2FoldChange, y = -log10(padj), label = ifelse(diffexpressed != "no changes", Species,"")), max.overlaps = 20) +
+        scale_color_manual(values=c("blue", "red", "darkgrey")) +
+        geom_vline(xintercept=0, col="darkgrey", linetype = "longdash", size=0.5) +
+        geom_hline(yintercept=-log10(0.05), col="darkgrey", linetype = "longdash", size=0.5) +
+   scale_x_continuous(expand = c(0, 0), limits = c(-16, 16),breaks=seq(-16,16,4))+
+   scale_y_continuous(expand = c(0, 0), limits = c(-4, 16),breaks=seq(-4,16,4))+
+        theme(legend.justification=c(0.01,0.99), legend.position=c(0.01,0.99),
+              panel.grid = element_blank(),
+              legend.title=element_blank(), 
+              legend.background = element_rect(color = NA),
+              legend.key = element_rect(color = NA),
+              panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+        xlab(expression(paste(Log[2], " Fold Changes"))) +
+        ylab(expression(paste(-Log[10], " P"))) +
+        scale_color_manual(name = "Legend", values=c("#4daf4a", "#e41a1c", "darkgrey"), labels = c("Control", "Herbivory", "No changes"), breaks = c("control", "herbivory", "no changes"))
+ggsave(plot, filename = "figures/volcano_18s.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+plot
+
+```
+
+## 16S
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+df.diff <- cal.diff.taxa2(ps.16s)
+
+df.diff$diffexpressed <- "no changes"
+df.diff$diffexpressed[df.diff$log2FoldChange > 0.1 & df.diff$padj < 0.05] <- "herbivory"
+df.diff$diffexpressed[df.diff$log2FoldChange < -0.1 & df.diff$padj < 0.05] <- "control"
+
+plot <- ggplot(data=df.diff) +
+        theme_bw(base_size = 12) +
+        geom_point(aes(x = log2FoldChange, y = -log10(padj), colour = diffexpressed), size=2) +
+        geom_text_repel(aes(x = log2FoldChange, y = -log10(padj), label = ifelse(diffexpressed != "no changes", Species,"")), max.overlaps = 20) +
+        scale_color_manual(values=c("blue", "red", "darkgrey")) +
+        geom_vline(xintercept=0, col="darkgrey", linetype = "longdash") +
+        geom_hline(yintercept=-log10(0.05), col="darkgrey", linetype = "longdash") +
+   scale_x_continuous(expand = c(0, 0), limits = c(-16, 16),breaks=seq(-16,16,4))+
+   scale_y_continuous(expand = c(0, 0), limits = c(-4, 16),breaks=seq(-4,16,4))+
+        theme(legend.justification=c(0.01,0.99), legend.position=c(0.01,0.99),
+              panel.grid = element_blank(),
+              legend.title=element_blank(), 
+              legend.background = element_rect(color = NA),
+              legend.key = element_rect(color = NA),
+              panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+        xlab(expression(paste(Log[2], " Fold Changes"))) +
+        ylab(expression(paste(-Log[10], " P"))) +
+        scale_color_manual(name = "Legend", values=c("#4daf4a", "#e41a1c", "darkgrey"), labels = c("Control", "Herbivory", "No changes"), breaks = c("control", "herbivory", "no changes"))
+ggsave(plot, filename = "figures/volcano_16s.pdf", dpi = 600,  width = 8, height = 5, units = "in")
+plot
+
+```
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,12 @@
+SampleID	pond	treatment
+1a	1	herb
+1b	1	ctr
+2b	2	herb
+3a	3	herb
+3b	3	ctr
+6a	6	herb
+6b	6	ctr
+7a	7	herb
+7b	7	ctr
+neg	neg	neg
+posContr	posContr	posContr
