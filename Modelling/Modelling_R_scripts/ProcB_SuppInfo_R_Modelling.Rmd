@@ -30,8 +30,10 @@ r1-2*r1*a11*N1-r1*a12*N2
 
 ```{r estimate a11 and a12}
 #install.packages("xlsx")
+library("rJava")
 library("xlsx")
-#BiocManager::install("xlsx")
+library("tidyverse")
+#BiocManager::install("rJava")
  set.seed(1)
 # assume linear regression;
 data.sp.sub<-d.sp[!is.na(d.sp$growth),];
@@ -40,13 +42,13 @@ data.snail.sp<-d.snail[d.snail$focal_species=="Sp",];
 data.snail.ch<-d.snail[d.snail$focal_species=="Ch",];
 
 
-model.snail.ch<-lm(log(leftover)~nr_snails,data=d.snail[d.snail$focal_species=="Ch",])
+#model.snail.ch<-lm(log(leftover/hour0)~nr_snails,data=d.snail[d.snail$focal_species=="Ch",])
 
 
 model.sp<-lm(growth~day0+competitor_constant,data=data.sp.sub);
 model.ch<-lm(growth~day0+competitor_constant,data=data.ch.sub);
-model.snail.sp<-lm(log(leftover)~nr_snails,data=data.snail.sp);
-model.snail.ch<-lm(log(leftover)~nr_snails,data=data.snail.ch);
+model.snail.sp<-lm((1-leftover/hour0)~nr_snails,data=data.snail.sp);
+model.snail.ch<-lm((1-leftover/hour0)~nr_snails,data=data.snail.ch);
 
 model.sp.resid<-model.sp$residuals;
 model.ch.resid<-model.ch$residuals;
@@ -85,13 +87,13 @@ model.snail.ch.resid<-model.snail.ch$residuals;
 
       # estimate parameters for snails herbivory on Sp
       var3<-lm(snail.sp.bootstrap~data.snail.sp$nr_snails)$coef
-        b1[i]<- 0-var3[2];
+        b1[i]<- var3[2];
 
       # estimate parameters for snails herbivory on Ch
       var4<-lm(snail.ch.bootstrap~data.snail.ch$nr_snails)$coef
         dim(data.snail.ch)
 #        length(snail.sp.bootstrap)
-        b2[i]<- 0-var4[2];
+        b2[i]<- var4[2];
   }
 
 prior1<-(1-a12*0.9-b1);
@@ -157,7 +159,7 @@ prior_plot <- function(prior) {
     geom_vline(xintercept = c(mean_val, low_quantile, high_quantile, 0),
                linetype = c("longdash", "dotted", "dotted", "solid"),
                color = c("black", "black", "black", "grey"),
-               size = c(0.4, 0.2, 0.2, 0.2))+
+               linewidth = c(0.4, 0.2, 0.2, 0.2))+
     theme(axis.text.y=element_blank(),
         axis.ticks.y=element_blank())
 }
@@ -165,7 +167,6 @@ prior_plot <- function(prior) {
 
 # Generate plots for prior1, prior2, prior3, and prior4
 a <- prior_plot(prior1)
-a
 b <- prior_plot(prior2)
 c <- prior_plot(prior3)
 d <- prior_plot(prior4)
@@ -179,7 +180,7 @@ d
 # Export the plots 
 multi.page <- ggarrange(a,b,c,d,
                         ncol = 4, nrow = 1)
-ggsave(multi.page, filename ="prior_density.pdf" ,height=3, width=15, dpi=600)
+ggsave(multi.page, filename ="prior_density2.pdf" ,height=3, width=15, dpi=600)
 dev.off()
 
 
